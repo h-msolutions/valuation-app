@@ -87,11 +87,12 @@ if product_title:
         st.info("Enter a Gemini API key in the sidebar to unlock manufacturing history.")
         
     st.markdown("---")
-    
-    # 2. Pull Market Prices using SerpApi
+        # 2. Pull Market Prices using SerpApi
     if serp_api_key:
         col1, col2 = st.columns(2)
-        client = serpapi.Client(api_key=serp_api_key)
+        
+        # Initialize client with timeout
+        client = serpapi.Client(api_key=serp_api_key, timeout=15)
         
         with col1:
             st.subheader("Active Asking Prices")
@@ -107,6 +108,11 @@ if product_title:
                             price = item.get("price", {}).get("raw", "Unknown") if isinstance(item.get("price"), dict) else "Unknown"
                             title = item.get("title", "Unknown item")
                             st.markdown(f"- **{price}** | {title}")
+                except serpapi.HTTPError as e:
+                    if "503" in str(e):
+                        st.warning("eBay service is temporarily busy (503). Wait a moment and try again.")
+                    else:
+                        st.error(f"Market API Error: {e}")
                 except Exception as e:
                     st.error(f"Market API Error: {e}")
 
@@ -124,5 +130,12 @@ if product_title:
                             price = item.get("price", {}).get("raw", "Unknown") if isinstance(item.get("price"), dict) else "Unknown"
                             title = item.get("title", "Unknown item")
                             st.markdown(f"- **{price}** | {title}")
+                except serpapi.HTTPError as e:
+                    if "503" in str(e):
+                        st.warning("eBay sold listings service is temporarily busy (503). Wait a moment and try again.")
+                    else:
+                        st.error(f"Market API Error: {e}")
                 except Exception as e:
                     st.error(f"Market API Error: {e}")
+
+    
