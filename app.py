@@ -4,35 +4,43 @@ import os
 import serpapi
 import google.generativeai as genai
 import concurrent.futures
+import re
 
 st.set_page_config(page_title="Valuation Engine", layout="wide")
 
 st.title("Secondary Market Valuation Tool")
 st.write("Search by photo or text to identify an item, pull its history, and check active vs. sold prices.")
 
-# Securely take the API keys in the sidebar
+# Sidebar API Keys
 st.sidebar.header("API Keys")
 serp_api_key = st.sidebar.text_input("Enter SerpApi Key", type="password")
 gemini_api_key = st.sidebar.text_input("Enter Gemini API Key", type="password")
 st.sidebar.markdown("*Get free keys at [SerpApi](https://serpapi.com) and [Google AI Studio](https://aistudio.google.com)*")
 
-# Cache helper function so identical searches load instantly and save API credits
+# Helper function to clean and shorten search strings for eBay
+def clean_query(title):
+    # Remove special symbols that cause search bottlenecks
+    cleaned = re.sub(r'[^\w\s-]', '', title)
+    words = cleaned.split()
+    # Keep only the first 5 core words (e.g., Brand + Model Number)
+    return " ".join(words[:5])
+
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_ebay_data(api_key, query, show_only_sold=False):
-    client = serpapi.Client(api_key=api_key, timeout=35)
-    params = {"engine": "ebay", "_nkw": query}
+def get_ebay_data(api_key, raw_query, show_only_sold=False):
+    # Trim the query string to prevent eBay scraper timeouts
+    short_query = clean_query(raw_query)
+    client = serpapi.Client(api_key=api_key, timeout=25)
+    params = {"engine": "ebay", "_nkw": short_query}
     if show_only_sold:
         params["show_only"] = "Sold"
-    return client.search(params)
+    return client.search(params), short_query
 
-# Let the user choose how to search
 input_method = st.radio("Choose Input Method", ("Text Search", "Take Photo", "File Upload"))
-
 product_title = ""
 
 # --- INPUT LOGIC ---
 if input_method == "Text Search":
-    search_query = st.text_input("Enter Make and Model (e.g., Pioneer HPM-100 speaker)")
+    search_query = st.text_input("Enter Make and Model (e.g., Allen Bradley PowerFlex 525)")
     if st.button("Search") and search_query:
         product_title = search_query
 
@@ -51,7 +59,7 @@ elif input_method in ["Take Photo", "File Upload"]:
         
         with st.spinner("Analyzing image with Google Lens..."):
             try:
-                client = serpapi.Client(api_key=serp_api_key, timeout=35)
+                client = serpapi.Client(api_key=serp_api_key, timeout=25)
                 upload_response = client.upload_image(tmp_path)
                 lens_results = client.search({
                     "engine": "google_lens",
@@ -74,7 +82,7 @@ if product_title:
     st.success(f"**Target Item:** {product_title}")
     st.markdown("---")
 
-    # 1. Pull Manufacturing History using Gemini
+    # 1. Manufacturing History (Gemini)
     if gemini_api_key:
         st.subheader("Manufacturing History")
         with st.spinner("Pulling item background..."):
@@ -98,30 +106,30 @@ if product_title:
         
     st.markdown("---")
     
-    # 2. Pull Market Prices using SerpApi in Parallel
+    # 2. Parallel Market Search with Query Truncation
     if serp_api_key:
         col1, col2 = st.columns(2)
         
-        with st.spinner("Fetching active and sold listings simultaneously..."):
-            # Execute active and sold requests concurrently to cut total wait time in half
+        with st.spinner("Fetching active and sold listings..."):
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future_active = executor.submit(get_ebay_data, serp_api_key, product_title, False)
                 future_sold = executor.submit(get_ebay_data, serp_api_key, product_title, True)
                 
                 try:
-                    active_results = future_active.result(timeout=40)
+                    active_results, active_query = future_active.result(timeout=30)
                 except Exception as e:
-                    active_results = e
+                    active_results, active_query = e, clean_query(product_title)
 
                 try:
-                    sold_results = future_sold.result(timeout=40)
+                    sold_results, sold_query = future_sold.result(timeout=30)
                 except Exception as e:
-                    sold_results = e
+                    sold_results, sold_query = e, clean_query(product_title)
 
         with col1:
             st.subheader("Active Asking Prices")
+            st.caption(f"Search term: *{active_query}*")
             if isinstance(active_results, Exception):
-                st.warning("Active listings search timed out. Click Search to try again.")
+                st.warning("Active listings search timed out.")
             else:
                 active_items = active_results.get("organic_results", [])
                 if not active_items:
@@ -134,8 +142,9 @@ if product_title:
 
         with col2:
             st.subheader("Completed Sold Prices")
+            st.caption(f"Search term: *{sold_query}*")
             if isinstance(sold_results, Exception):
-                st.warning("Sold listings search timed out. Click Search to try again.")
+                st.warning("Sold listings search timed out. Try refining text input.")
             else:
                 sold_items = sold_results.get("organic_results", [])
                 if not sold_items:
