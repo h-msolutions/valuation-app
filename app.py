@@ -3,6 +3,7 @@ import tempfile
 import os
 import serpapi
 import google.generativeai as genai
+import concurrent.futures
 
 st.set_page_config(page_title="Valuation Engine", layout="wide")
 
@@ -14,6 +15,15 @@ st.sidebar.header("API Keys")
 serp_api_key = st.sidebar.text_input("Enter SerpApi Key", type="password")
 gemini_api_key = st.sidebar.text_input("Enter Gemini API Key", type="password")
 st.sidebar.markdown("*Get free keys at [SerpApi](https://serpapi.com) and [Google AI Studio](https://aistudio.google.com)*")
+
+# Cache helper function so identical searches load instantly and save API credits
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_ebay_data(api_key, query, show_only_sold=False):
+    client = serpapi.Client(api_key=api_key, timeout=35)
+    params = {"engine": "ebay", "_nkw": query}
+    if show_only_sold:
+        params["show_only"] = "Sold"
+    return client.search(params)
 
 # Let the user choose how to search
 input_method = st.radio("Choose Input Method", ("Text Search", "Take Photo", "File Upload"))
@@ -41,7 +51,7 @@ elif input_method in ["Take Photo", "File Upload"]:
         
         with st.spinner("Analyzing image with Google Lens..."):
             try:
-                client = serpapi.Client(api_key=serp_api_key)
+                client = serpapi.Client(api_key=serp_api_key, timeout=35)
                 upload_response = client.upload_image(tmp_path)
                 lens_results = client.search({
                     "engine": "google_lens",
@@ -87,52 +97,51 @@ if product_title:
         st.info("Enter a Gemini API key in the sidebar to unlock manufacturing history.")
         
     st.markdown("---")
-            # 2. Pull Market Prices using SerpApi
+    
+    # 2. Pull Market Prices using SerpApi in Parallel
     if serp_api_key:
         col1, col2 = st.columns(2)
         
-        # Increased timeout to 30 seconds to allow live eBay scraping to finish
-        client = serpapi.Client(api_key=serp_api_key, timeout=30)
-        
+        with st.spinner("Fetching active and sold listings simultaneously..."):
+            # Execute active and sold requests concurrently to cut total wait time in half
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future_active = executor.submit(get_ebay_data, serp_api_key, product_title, False)
+                future_sold = executor.submit(get_ebay_data, serp_api_key, product_title, True)
+                
+                try:
+                    active_results = future_active.result(timeout=40)
+                except Exception as e:
+                    active_results = e
+
+                try:
+                    sold_results = future_sold.result(timeout=40)
+                except Exception as e:
+                    sold_results = e
+
         with col1:
             st.subheader("Active Asking Prices")
-            with st.spinner("Fetching active listings..."):
-                try:
-                    active_results = client.search({"engine": "ebay", "_nkw": product_title})
-                    active_items = active_results.get("organic_results", [])
-                    
-                    if not active_items:
-                        st.write("No active listings found.")
-                    else:
-                        for item in active_items[:5]:
-                            price = item.get("price", {}).get("raw", "Unknown") if isinstance(item.get("price"), dict) else "Unknown"
-                            title = item.get("title", "Unknown item")
-                            st.markdown(f"- **{price}** | {title}")
-                except Exception as e:
-                    if "timed out" in str(e).lower():
-                        st.warning("Active listings search timed out. eBay took too long to respond—click Search to try again.")
-                    else:
-                        st.error(f"Market API Error: {e}")
+            if isinstance(active_results, Exception):
+                st.warning("Active listings search timed out. Click Search to try again.")
+            else:
+                active_items = active_results.get("organic_results", [])
+                if not active_items:
+                    st.write("No active listings found.")
+                else:
+                    for item in active_items[:5]:
+                        price = item.get("price", {}).get("raw", "Unknown") if isinstance(item.get("price"), dict) else "Unknown"
+                        title = item.get("title", "Unknown item")
+                        st.markdown(f"- **{price}** | {title}")
 
         with col2:
             st.subheader("Completed Sold Prices")
-            with st.spinner("Fetching historical sales..."):
-                try:
-                    sold_results = client.search({"engine": "ebay", "_nkw": product_title, "show_only": "Sold"})
-                    sold_items = sold_results.get("organic_results", [])
-                    
-                    if not sold_items:
-                        st.write("No completed sales found.")
-                    else:
-                        for item in sold_items[:5]:
-                            price = item.get("price", {}).get("raw", "Unknown") if isinstance(item.get("price"), dict) else "Unknown"
-                            title = item.get("title", "Unknown item")
-                            st.markdown(f"- **{price}** | {title}")
-                except Exception as e:
-                    if "timed out" in str(e).lower():
-                        st.warning("Sold listings search timed out. eBay took too long to respond—click Search to try again.")
-                    else:
-                        st.error(f"Market API Error: {e}")
-
-
-    
+            if isinstance(sold_results, Exception):
+                st.warning("Sold listings search timed out. Click Search to try again.")
+            else:
+                sold_items = sold_results.get("organic_results", [])
+                if not sold_items:
+                    st.write("No completed sales found.")
+                else:
+                    for item in sold_items[:5]:
+                        price = item.get("price", {}).get("raw", "Unknown") if isinstance(item.get("price"), dict) else "Unknown"
+                        title = item.get("title", "Unknown item")
+                        st.markdown(f"- **{price}** | {title}")
