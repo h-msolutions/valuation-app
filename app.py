@@ -17,22 +17,28 @@ serp_api_key = st.sidebar.text_input("Enter SerpApi Key", type="password")
 gemini_api_key = st.sidebar.text_input("Enter Gemini API Key", type="password")
 st.sidebar.markdown("*Get free keys at [SerpApi](https://serpapi.com) and [Google AI Studio](https://aistudio.google.com)*")
 
-# Helper function to clean and shorten search strings for eBay
 def clean_query(title):
-    # Remove special symbols that cause search bottlenecks
     cleaned = re.sub(r'[^\w\s-]', '', title)
     words = cleaned.split()
-    # Keep only the first 5 core words (e.g., Brand + Model Number)
     return " ".join(words[:5])
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def get_ebay_data(api_key, raw_query, show_only_sold=False):
-    # Trim the query string to prevent eBay scraper timeouts
+def get_active_ebay(api_key, raw_query):
     short_query = clean_query(raw_query)
-    client = serpapi.Client(api_key=api_key, timeout=25)
-    params = {"engine": "ebay", "_nkw": short_query}
-    if show_only_sold:
-        params["show_only"] = "Sold"
+    client = serpapi.Client(api_key=api_key, timeout=15)
+    return client.search({"engine": "ebay", "_nkw": short_query}), short_query
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_sold_ebay_via_google(api_key, raw_query):
+    """Uses Google search indexing for eBay sold items—bypasses eBay anti-scraping blocks."""
+    short_query = clean_query(raw_query)
+    client = serpapi.Client(api_key=api_key, timeout=15)
+    # Search Google for indexed sold listings on eBay
+    params = {
+        "engine": "google",
+        "q": f'site:ebay.com/itm "{short_query}" "Sold"',
+        "num": 5
+    }
     return client.search(params), short_query
 
 input_method = st.radio("Choose Input Method", ("Text Search", "Take Photo", "File Upload"))
@@ -59,7 +65,7 @@ elif input_method in ["Take Photo", "File Upload"]:
         
         with st.spinner("Analyzing image with Google Lens..."):
             try:
-                client = serpapi.Client(api_key=serp_api_key, timeout=25)
+                client = serpapi.Client(api_key=serp_api_key, timeout=20)
                 upload_response = client.upload_image(tmp_path)
                 lens_results = client.search({
                     "engine": "google_lens",
@@ -106,22 +112,22 @@ if product_title:
         
     st.markdown("---")
     
-    # 2. Parallel Market Search with Query Truncation
+    # 2. Parallel Market Search (eBay Active + Google-Indexed eBay Sold)
     if serp_api_key:
         col1, col2 = st.columns(2)
         
         with st.spinner("Fetching active and sold listings..."):
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                future_active = executor.submit(get_ebay_data, serp_api_key, product_title, False)
-                future_sold = executor.submit(get_ebay_data, serp_api_key, product_title, True)
+                future_active = executor.submit(get_active_ebay, serp_api_key, product_title)
+                future_sold = executor.submit(get_sold_ebay_via_google, serp_api_key, product_title)
                 
                 try:
-                    active_results, active_query = future_active.result(timeout=30)
+                    active_results, active_query = future_active.result(timeout=20)
                 except Exception as e:
                     active_results, active_query = e, clean_query(product_title)
 
                 try:
-                    sold_results, sold_query = future_sold.result(timeout=30)
+                    sold_results, sold_query = future_sold.result(timeout=20)
                 except Exception as e:
                     sold_results, sold_query = e, clean_query(product_title)
 
@@ -144,13 +150,17 @@ if product_title:
             st.subheader("Completed Sold Prices")
             st.caption(f"Search term: *{sold_query}*")
             if isinstance(sold_results, Exception):
-                st.warning("Sold listings search timed out. Try refining text input.")
+                st.warning("Sold listings search timed out.")
             else:
+                # Process Google organic search results for eBay sold items
                 sold_items = sold_results.get("organic_results", [])
                 if not sold_items:
                     st.write("No completed sales found.")
                 else:
                     for item in sold_items[:5]:
-                        price = item.get("price", {}).get("raw", "Unknown") if isinstance(item.get("price"), dict) else "Unknown"
                         title = item.get("title", "Unknown item")
-                        st.markdown(f"- **{price}** | {title}")
+                        snippet = item.get("snippet", "")
+                        link = item.get("link", "#")
+                        st.markdown(f"- [{title}]({link})")
+                        if snippet:
+                            st.caption(snippet[:120] + "...")
