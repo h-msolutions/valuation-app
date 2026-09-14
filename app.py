@@ -9,7 +9,7 @@ st.set_page_config(page_title="Valuation Engine", layout="wide")
 st.title("Secondary Market Valuation Tool")
 st.write("Search by photo or text to identify an item, pull its history, and check active vs. sold prices.")
 
-Securely take the API keys in the sidebar
+# Securely take the API keys in the sidebar
 st.sidebar.header("API Keys")
 serp_api_key = st.sidebar.text_input("Enter SerpApi Key", type="password")
 gemini_api_key = st.sidebar.text_input("Enter Gemini API Key", type="password")
