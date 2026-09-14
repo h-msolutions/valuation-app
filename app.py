@@ -11,16 +11,20 @@ st.set_page_config(page_title="Valuation Engine", layout="wide")
 st.title("Secondary Market Valuation Tool")
 st.write("Search by photo or text to identify an item, pull its history, and check active vs. sold prices.")
 
-# Sidebar API Keys
-st.sidebar.header("API Keys")
-serp_api_key = st.sidebar.text_input("Enter SerpApi Key", type="password")
-gemini_api_key = st.sidebar.text_input("Enter Gemini API Key", type="password")
-st.sidebar.markdown("*Get free keys at [SerpApi](https://serpapi.com) and [Google AI Studio](https://aistudio.google.com)*")
+# --- API KEY MANAGEMENT ---
+serp_api_key = st.secrets.get("SERPAPI_KEY")
+gemini_api_key = st.secrets.get("GEMINI_API_KEY")
+
+if not serp_api_key or not gemini_api_key:
+    st.sidebar.header("API Key Setup")
+    if not serp_api_key:
+        serp_api_key = st.sidebar.text_input("Enter SerpApi Key", type="password")
+    if not gemini_api_key:
+        gemini_api_key = st.sidebar.text_input("Enter Gemini API Key", type="password")
 
 def clean_query(title):
     cleaned = re.sub(r'[^\w\s-]', '', title)
     words = cleaned.split()
-    # Extract specific part numbers/model codes containing digits if available
     part_numbers = [w for w in words if re.search(r'\d', w) and len(w) > 3]
     if part_numbers:
         return f"{words[0]} {part_numbers[0]}"
@@ -30,18 +34,23 @@ def clean_query(title):
 def get_active_ebay(api_key, raw_query):
     short_query = clean_query(raw_query)
     client = serpapi.Client(api_key=api_key, timeout=20)
-    return client.search({"engine": "ebay", "_nkw": short_query}), short_query
+    params = {
+        "engine": "ebay",
+        "_nkw": short_query,
+        "LH_ItemCondition": "3000|7000"  # Filter: Used (3000) & For Parts/Not Working (7000)
+    }
+    return client.search(params), short_query
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_sold_ebay(api_key, raw_query):
-    """Queries native eBay completed sales using explicit LH_Sold & LH_Complete URL parameters."""
     short_query = clean_query(raw_query)
     client = serpapi.Client(api_key=api_key, timeout=20)
     params = {
         "engine": "ebay",
         "_nkw": short_query,
         "LH_Sold": "1",
-        "LH_Complete": "1"
+        "LH_Complete": "1",
+        "LH_ItemCondition": "3000|7000"  # Filter: Used (3000) & For Parts/Not Working (7000)
     }
     return client.search(params), short_query
 
@@ -137,7 +146,7 @@ if product_title:
 
         with col1:
             st.subheader("Active Asking Prices")
-            st.caption(f"Query: *{active_query}*")
+            st.caption(f"Query: *{active_query}* (Used / Parts)")
             if isinstance(active_results, Exception):
                 st.warning("Active search timed out.")
             else:
@@ -148,11 +157,12 @@ if product_title:
                     for item in active_items[:5]:
                         price = item.get("price", {}).get("raw", "Unknown") if isinstance(item.get("price"), dict) else "Unknown"
                         title = item.get("title", "Unknown item")
-                        st.markdown(f"- **{price}** | {title}")
+                        link = item.get("link", "#")
+                        st.markdown(f"- **{price}** | [{title}]({link})")
 
         with col2:
             st.subheader("Completed Sold Prices")
-            st.caption(f"Query: *{sold_query}*")
+            st.caption(f"Query: *{sold_query}* (Used / Parts)")
             if isinstance(sold_results, Exception):
                 st.warning("Sold search timed out.")
             else:
@@ -163,4 +173,5 @@ if product_title:
                     for item in sold_items[:5]:
                         price = item.get("price", {}).get("raw", "Unknown") if isinstance(item.get("price"), dict) else "Unknown"
                         title = item.get("title", "Unknown item")
-                        st.markdown(f"- **{price}** | {title}")
+                        link = item.get("link", "#")
+                        st.markdown(f"- **{price}** | [{title}]({link})")
