@@ -20,7 +20,8 @@ st.sidebar.markdown("*Get free keys at [SerpApi](https://serpapi.com) and [Googl
 def clean_query(title):
     cleaned = re.sub(r'[^\w\s-]', '', title)
     words = cleaned.split()
-    return " ".join(words[:5])
+    # Keep up to 4 core words (e.g. brand + part number)
+    return " ".join(words[:4])
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_active_ebay(api_key, raw_query):
@@ -30,13 +31,12 @@ def get_active_ebay(api_key, raw_query):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_sold_ebay_via_google(api_key, raw_query):
-    """Uses Google search indexing for eBay sold items—bypasses eBay anti-scraping blocks."""
     short_query = clean_query(raw_query)
     client = serpapi.Client(api_key=api_key, timeout=15)
-    # Search Google for indexed sold listings on eBay
+    # Target indexed eBay item listings directly without restrictive quote locks
     params = {
         "engine": "google",
-        "q": f'site:ebay.com/itm "{short_query}" "Sold"',
+        "q": f"site:ebay.com/itm {short_query}",
         "num": 5
     }
     return client.search(params), short_query
@@ -46,7 +46,7 @@ product_title = ""
 
 # --- INPUT LOGIC ---
 if input_method == "Text Search":
-    search_query = st.text_input("Enter Make and Model (e.g., Allen Bradley PowerFlex 525)")
+    search_query = st.text_input("Enter Make and Model (e.g., Allen Bradley 25B-D4P0N104)")
     if st.button("Search") and search_query:
         product_title = search_query
 
@@ -112,30 +112,30 @@ if product_title:
         
     st.markdown("---")
     
-    # 2. Parallel Market Search (eBay Active + Google-Indexed eBay Sold)
+    # 2. Parallel Market Search
     if serp_api_key:
         col1, col2 = st.columns(2)
         
-        with st.spinner("Fetching active and sold listings..."):
+        with st.spinner("Fetching market data..."):
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future_active = executor.submit(get_active_ebay, serp_api_key, product_title)
                 future_sold = executor.submit(get_sold_ebay_via_google, serp_api_key, product_title)
                 
                 try:
-                    active_results, active_query = future_active.result(timeout=20)
+                    active_results, active_query = future_active.result(timeout=15)
                 except Exception as e:
                     active_results, active_query = e, clean_query(product_title)
 
                 try:
-                    sold_results, sold_query = future_sold.result(timeout=20)
+                    sold_results, sold_query = future_sold.result(timeout=15)
                 except Exception as e:
                     sold_results, sold_query = e, clean_query(product_title)
 
         with col1:
             st.subheader("Active Asking Prices")
-            st.caption(f"Search term: *{active_query}*")
+            st.caption(f"Query: *{active_query}*")
             if isinstance(active_results, Exception):
-                st.warning("Active listings search timed out.")
+                st.warning("Active search timed out.")
             else:
                 active_items = active_results.get("organic_results", [])
                 if not active_items:
@@ -147,20 +147,22 @@ if product_title:
                         st.markdown(f"- **{price}** | {title}")
 
         with col2:
-            st.subheader("Completed Sold Prices")
-            st.caption(f"Search term: *{sold_query}*")
+            st.subheader("Indexed Completed Listings")
+            st.caption(f"Query: *{sold_query}*")
             if isinstance(sold_results, Exception):
-                st.warning("Sold listings search timed out.")
+                st.warning("Completed search timed out.")
             else:
-                # Process Google organic search results for eBay sold items
                 sold_items = sold_results.get("organic_results", [])
-                if not sold_items:
-                    st.write("No completed sales found.")
+                # Filter strictly to links that contain ebay.com/itm
+                valid_ebay = [i for i in sold_items if "ebay.com/itm" in i.get("link", "")]
+                
+                if not valid_ebay:
+                    st.write("No completed eBay listings indexed.")
                 else:
-                    for item in sold_items[:5]:
-                        title = item.get("title", "Unknown item")
-                        snippet = item.get("snippet", "")
+                    for item in valid_ebay[:5]:
+                        title = item.get("title", "eBay Listing").replace(" | eBay", "")
                         link = item.get("link", "#")
+                        snippet = item.get("snippet", "")
                         st.markdown(f"- [{title}]({link})")
                         if snippet:
-                            st.caption(snippet[:120] + "...")
+                            st.caption(snippet[:110] + "...")
