@@ -70,7 +70,7 @@ if product_title:
         with st.spinner("Pulling item background..."):
             try:
                 genai.configure(api_key=gemini_api_key)
-                model = genai.GenerativeModel("gemini-1.5-flash")
+                model = genai.GenerativeModel("gemini-2.5-flash")
                 prompt = f"""
                 You are an expert appraiser. I am researching this item: '{product_title}'.
                 Provide a short summary containing:
